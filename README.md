@@ -1,2 +1,5 @@
-# magic-bevy
-A modular, hot-reloaded editor and toolchain for the Bevy engine.
+# MagicBevy
+
+**The magic of MagicBevy began with Bevy, but it doesn’t end with it.**
+
+A modular and customizable editor and development framework for building games.
