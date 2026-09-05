@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "magic_core",
+    "magic_editor"
+]
+resolver = "2"
+
+[package]
+name = "magic-bevy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+magic_core = { path = "magic_core" }
+
+libloading = "0.8"
+eframe = "0.30"
+egui = "0.33.3"
+notify = "8.1.0"
+colored = "3.1.1"
