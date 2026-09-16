@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "magic_core",
-    "magic_editor"
+    "magic_editor",   
+    "magic_pkg"
 ]
 resolver = "2"
 
