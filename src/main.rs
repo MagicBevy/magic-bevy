@@ -159,6 +159,14 @@ impl MagicBevyApp {
                 .unwrap();
         }
 
+        let profiles_path = Path::new("./profiles");
+        if profiles_path.exists() {
+            let absolute_profiles = profiles_path.canonicalize().unwrap();
+            watcher
+                .watch(&absolute_profiles, RecursiveMode::Recursive)
+                .unwrap();
+        }
+
         let editor_src_path = Path::new("./magic_editor/src");
         if editor_src_path.exists() {
             let absolute_editor = editor_src_path.canonicalize().unwrap();
