@@ -257,6 +257,15 @@ impl PackageManager {
             source,
         })?;
 
+        let vendor_dir = self.packages_root.join(vendor);
+        if vendor_dir.exists() {
+            if let Ok(mut entries) = fs::read_dir(&vendor_dir) {
+                if entries.next().is_none() {
+                    let _ = fs::remove_dir(&vendor_dir);
+                }
+            }
+        }
+
         self.sync_profiles()?;
 
         Ok(format!("{vendor}/{name}"))
