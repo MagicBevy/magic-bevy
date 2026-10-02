@@ -99,8 +99,32 @@ impl MagicBevyApp {
         is_compiling: Arc<Mutex<bool>>,
     ) -> notify::RecommendedWatcher {
         let last_change = Arc::new(Mutex::new(Instant::now()));
+        let pending = Arc::new(Mutex::new(false));
+
         let tx_clone = tx.clone();
         let is_compiling_clone = Arc::clone(&is_compiling);
+        let last_change_clone = Arc::clone(&last_change);
+        let pending_clone = Arc::clone(&pending);
+
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(200));
+
+                let mut is_pending = pending_clone.lock().unwrap();
+                if *is_pending {
+                    let compiling = *is_compiling_clone.lock().unwrap();
+                    let last_event_time = *last_change_clone.lock().unwrap();
+
+                    if !compiling && last_event_time.elapsed() >= Duration::from_millis(1500) {
+                        *is_pending = false; 
+                        Self::execute_compile(tx_clone.clone(), Arc::clone(&is_compiling_clone));
+                    }
+                }
+            }
+        });
+
+        let last_change_watcher = Arc::clone(&last_change);
+        let pending_watcher = Arc::clone(&pending);
 
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
             if *EngineCompilerState::global().lock_mode.lock().unwrap()
@@ -110,41 +134,25 @@ impl MagicBevyApp {
             }
 
             if let Ok(event) = res {
-                if event.kind.is_modify() || event.kind.is_create() {
+                if event.kind.is_modify() || event.kind.is_create() || event.kind.is_remove() {
                     let is_valid_change = event.paths.iter().any(|p| {
                         let path_str = p.to_string_lossy();
-                        (path_str.ends_with(".rs") || path_str.ends_with("package.json"))
-                            && !path_str.contains("/target/")
-                            && !path_str.contains("/.git/")
+
+                        if path_str.contains("/target/") || path_str.contains("/.git/") {
+                            return false;
+                        }
+
+                        path_str.ends_with(".rs")
+                            || path_str.ends_with("package.json")
+                            || path_str.ends_with("Cargo.toml")
+                            || path_str.ends_with("Cargo.lock")
+                            || path_str.contains("/packages/")
+                            || path_str.contains("/profiles/")
                     });
 
                     if is_valid_change {
-                        if *is_compiling_clone.lock().unwrap() {
-                            return;
-                        }
-
-                        let mut last = last_change.lock().unwrap();
-                        let now = Instant::now();
-
-                        if now.duration_since(*last) < Duration::from_millis(500) {
-                            *last = now;
-                            return;
-                        }
-                        *last = now;
-
-                        let tx_worker = tx_clone.clone();
-                        let is_compiling_worker = Arc::clone(&is_compiling_clone);
-                        let last_change_worker = Arc::clone(&last_change);
-
-                        thread::spawn(move || {
-                            thread::sleep(Duration::from_secs(1));
-                            let last_time = *last_change_worker.lock().unwrap();
-                            if Instant::now().duration_since(last_time)
-                                >= Duration::from_millis(800)
-                            {
-                                Self::execute_compile(tx_worker, is_compiling_worker);
-                            }
-                        });
+                        *last_change_watcher.lock().unwrap() = Instant::now();
+                        *pending_watcher.lock().unwrap() = true;
                     }
                 }
             }
@@ -153,26 +161,23 @@ impl MagicBevyApp {
 
         let packages_path = Path::new("./packages");
         if packages_path.exists() {
-            let absolute_packages = packages_path.canonicalize().unwrap();
-            watcher
-                .watch(&absolute_packages, RecursiveMode::Recursive)
-                .unwrap();
+            if let Ok(absolute_packages) = packages_path.canonicalize() {
+                let _ = watcher.watch(&absolute_packages, RecursiveMode::Recursive);
+            }
         }
 
         let profiles_path = Path::new("./profiles");
         if profiles_path.exists() {
-            let absolute_profiles = profiles_path.canonicalize().unwrap();
-            watcher
-                .watch(&absolute_profiles, RecursiveMode::Recursive)
-                .unwrap();
+            if let Ok(absolute_profiles) = profiles_path.canonicalize() {
+                let _ = watcher.watch(&absolute_profiles, RecursiveMode::Recursive);
+            }
         }
 
         let editor_src_path = Path::new("./magic_editor/src");
         if editor_src_path.exists() {
-            let absolute_editor = editor_src_path.canonicalize().unwrap();
-            watcher
-                .watch(&absolute_editor, RecursiveMode::Recursive)
-                .unwrap();
+            if let Ok(absolute_editor) = editor_src_path.canonicalize() {
+                let _ = watcher.watch(&absolute_editor, RecursiveMode::Recursive);
+            }
         }
 
         watcher
