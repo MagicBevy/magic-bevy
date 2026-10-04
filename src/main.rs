@@ -18,7 +18,9 @@ enum CompilerMessage {
 struct MagicBevyApp {
     menu_registry: MenuRegistry,
     compiler_manager: CompilerStateManager,
+    tx: Sender<CompilerMessage>,
     rx: Receiver<CompilerMessage>,
+    is_compiling: Arc<Mutex<bool>>,
     _watcher: notify::RecommendedWatcher,
     current_lib: Option<libloading::Library>,
 }
@@ -30,12 +32,18 @@ impl MagicBevyApp {
         let (tx, rx) = channel();
         let is_compiling = Arc::new(Mutex::new(false));
 
-        let watcher = Self::init_file_watcher(tx.clone(), Arc::clone(&is_compiling));
+        let watcher = Self::init_file_watcher(
+            tx.clone(),
+            Arc::clone(&is_compiling),
+            cc.egui_ctx.clone(),
+        );
 
         let mut app = Self {
             menu_registry: MenuRegistry::new(),
             compiler_manager: CompilerStateManager::new(),
+            tx,
             rx,
+            is_compiling,
             _watcher: watcher,
             current_lib: None,
         };
@@ -64,14 +72,6 @@ impl MagicBevyApp {
         if Path::new(lib_path).exists() {
             unsafe {
                 if let Ok(lib) = libloading::Library::new(lib_path) {
-                    //type RegisterFn = unsafe extern "Rust" fn(&mut SystemManager);
-
-                    /*if let Ok(register_all_packages) = lib.get::<RegisterFn>(b"register_all_packages\0") {
-                        register_all_packages(&mut self.system_manager);
-                        mgsuccess!("HotReload", "Dynamic profile packages registered directly into launcher workspace.");
-                    } else {
-                        mgerror!("HotReload", "Failed to resolve 'register_all_packages' symbol from binary.");
-                    }*/
                     self.current_lib = Some(lib);
                 } else {
                     mgerror!(
@@ -97,6 +97,7 @@ impl MagicBevyApp {
     fn init_file_watcher(
         tx: Sender<CompilerMessage>,
         is_compiling: Arc<Mutex<bool>>,
+        ctx: egui::Context,
     ) -> notify::RecommendedWatcher {
         let last_change = Arc::new(Mutex::new(Instant::now()));
         let pending = Arc::new(Mutex::new(false));
@@ -105,6 +106,7 @@ impl MagicBevyApp {
         let is_compiling_clone = Arc::clone(&is_compiling);
         let last_change_clone = Arc::clone(&last_change);
         let pending_clone = Arc::clone(&pending);
+        let ctx_thread = ctx.clone();
 
         thread::spawn(move || {
             loop {
@@ -116,8 +118,12 @@ impl MagicBevyApp {
                     let last_event_time = *last_change_clone.lock().unwrap();
 
                     if !compiling && last_event_time.elapsed() >= Duration::from_millis(1500) {
-                        *is_pending = false; 
-                        Self::execute_compile(tx_clone.clone(), Arc::clone(&is_compiling_clone));
+                        *is_pending = false;
+                        Self::execute_compile(
+                            tx_clone.clone(),
+                            Arc::clone(&is_compiling_clone),
+                            ctx_thread.clone(),
+                        );
                     }
                 }
             }
@@ -125,6 +131,8 @@ impl MagicBevyApp {
 
         let last_change_watcher = Arc::clone(&last_change);
         let pending_watcher = Arc::clone(&pending);
+        let tx_watcher = tx.clone();
+        let ctx_watcher = ctx.clone();
 
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
             if *EngineCompilerState::global().lock_mode.lock().unwrap()
@@ -138,7 +146,11 @@ impl MagicBevyApp {
                     let is_valid_change = event.paths.iter().any(|p| {
                         let path_str = p.to_string_lossy();
 
-                        if path_str.contains("/target/") || path_str.contains("/.git/") {
+                        if path_str.contains("/target/")
+                            || path_str.contains("\\target\\")
+                            || path_str.contains("/.git/")
+                            || path_str.contains("\\.git\\")
+                        {
                             return false;
                         }
 
@@ -147,11 +159,19 @@ impl MagicBevyApp {
                             || path_str.ends_with("Cargo.toml")
                             || path_str.ends_with("Cargo.lock")
                             || path_str.contains("/packages/")
+                            || path_str.contains("\\packages\\")
+                            || p.components().any(|c| c.as_os_str() == "packages")
                     });
 
                     if is_valid_change {
                         *last_change_watcher.lock().unwrap() = Instant::now();
                         *pending_watcher.lock().unwrap() = true;
+
+                        let _ = tx_watcher.send(CompilerMessage::Indexing(
+                            "Indexing package changes...".to_string(),
+                            1,
+                        ));
+                        ctx_watcher.request_repaint();
                     }
                 }
             }
@@ -175,7 +195,11 @@ impl MagicBevyApp {
         watcher
     }
 
-    fn execute_compile(tx: Sender<CompilerMessage>, is_compiling: Arc<Mutex<bool>>) {
+    fn execute_compile(
+        tx: Sender<CompilerMessage>,
+        is_compiling: Arc<Mutex<bool>>,
+        ctx: egui::Context,
+    ) {
         {
             let mut lock = is_compiling.lock().unwrap();
             if *lock {
@@ -184,6 +208,13 @@ impl MagicBevyApp {
             *lock = true;
         }
 
+        let _ = tx.send(CompilerMessage::Indexing(
+            "Compiling dynamic module...".to_string(),
+            1,
+        ));
+        ctx.request_repaint();
+
+        let ctx_clone = ctx.clone();
         thread::spawn(move || {
             let check_output = Command::new("cargo")
                 .args(["check", "-p", "magic_editor", "--message-format=short"])
@@ -191,11 +222,6 @@ impl MagicBevyApp {
 
             if let Ok(output) = check_output {
                 if output.status.success() {
-                    let _ = tx.send(CompilerMessage::Indexing(
-                        "Compiling dynamic module...".to_string(),
-                        1,
-                    ));
-
                     let build_status = Command::new("cargo")
                         .args(["build", "-p", "magic_editor", "--lib"])
                         .status();
@@ -217,6 +243,7 @@ impl MagicBevyApp {
             }
 
             *is_compiling.lock().unwrap() = false;
+            ctx_clone.request_repaint();
         });
     }
 }
@@ -227,9 +254,15 @@ impl eframe::App for MagicBevyApp {
         if let Ok(mut req) = compiler_state.request_reload.lock() {
             if *req {
                 *req = false;
-                let is_compiling = Arc::new(Mutex::new(false));
-                let (tx, _) = channel();
-                Self::execute_compile(tx, is_compiling);
+                let _ = self.tx.send(CompilerMessage::Indexing(
+                    "Compiling dynamic module...".to_string(),
+                    1,
+                ));
+                Self::execute_compile(
+                    self.tx.clone(),
+                    Arc::clone(&self.is_compiling),
+                    ctx.clone(),
+                );
             }
         }
 
