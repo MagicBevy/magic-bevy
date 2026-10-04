@@ -1,6 +1,8 @@
 [package]
-name = "runtime"
+name = "magic_runtime"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+magic_core = { path = "../magic_core" }
+magic_pkg_runtime = { path = "magic_pkg_runtime"}

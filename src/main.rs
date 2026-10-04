@@ -147,7 +147,6 @@ impl MagicBevyApp {
                             || path_str.ends_with("Cargo.toml")
                             || path_str.ends_with("Cargo.lock")
                             || path_str.contains("/packages/")
-                            || path_str.contains("/profiles/")
                     });
 
                     if is_valid_change {
@@ -166,14 +165,7 @@ impl MagicBevyApp {
             }
         }
 
-        let profiles_path = Path::new("./profiles");
-        if profiles_path.exists() {
-            if let Ok(absolute_profiles) = profiles_path.canonicalize() {
-                let _ = watcher.watch(&absolute_profiles, RecursiveMode::Recursive);
-            }
-        }
-
-        let editor_src_path = Path::new("./magic_editor/src");
+        let editor_src_path = Path::new("./magic_editor");
         if editor_src_path.exists() {
             if let Ok(absolute_editor) = editor_src_path.canonicalize() {
                 let _ = watcher.watch(&absolute_editor, RecursiveMode::Recursive);
