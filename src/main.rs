@@ -17,6 +17,7 @@ enum CompilerMessage {
 
 struct MagicBevyApp {
     menu_registry: MenuRegistry,
+    editor_events: EditorEventRegistry,
     compiler_manager: CompilerStateManager,
     tx: Sender<CompilerMessage>,
     rx: Receiver<CompilerMessage>,
@@ -40,6 +41,7 @@ impl MagicBevyApp {
 
         let mut app = Self {
             menu_registry: MenuRegistry::new(),
+            editor_events: EditorEventRegistry::new(),
             compiler_manager: CompilerStateManager::new(),
             tx,
             rx,
@@ -60,6 +62,7 @@ impl MagicBevyApp {
         mgprint!("HotReload", "Clearing resources and loading new library...");
 
         self.menu_registry.clear();
+        self.editor_events.clear();
         self.current_lib = None;
 
         #[cfg(target_os = "linux")]
@@ -72,6 +75,25 @@ impl MagicBevyApp {
         if Path::new(lib_path).exists() {
             unsafe {
                 if let Ok(lib) = libloading::Library::new(lib_path) {
+                    // تعریف امضای تابع ریجستر
+                    type RegisterFn = unsafe extern "Rust" fn(&mut EditorRegistry);
+
+                    // استخراج تابع از لایبرری و اجرای آن
+                    if let Ok(register_all_packages) = lib.get::<RegisterFn>(b"register_all_packages\0") {
+                        let mut editor_registry = EditorRegistry {
+                            menu: &mut self.menu_registry,
+                            events: &mut self.editor_events,
+                        };
+
+                        register_all_packages(&mut editor_registry);
+                        mgsuccess!("HotReload", "Dynamic packages registered successfully.");
+                    } else {
+                        mgwarn!(
+                            "HotReload",
+                            "Failed to resolve 'register_all_packages' symbol from binary."
+                        );
+                    }
+
                     self.current_lib = Some(lib);
                 } else {
                     mgerror!(
